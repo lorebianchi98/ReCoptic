@@ -1,0 +1,4 @@
+model:
+  visual_backbone: "dino_resnet50"
+  n_layers: 0
+  resize_dim: 480

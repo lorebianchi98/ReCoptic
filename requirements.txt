@@ -1,0 +1,15 @@
+matplotlib
+opencv-python
+pyyaml
+requests
+scikit-image
+tqdm
+timm
+tensorboard
+transformers
+lightning==2.5
+hydra-core
+scikit-learn
+plotly
+umap-learn
+nbformat

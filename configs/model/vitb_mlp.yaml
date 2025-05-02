@@ -1,0 +1,7 @@
+model:
+  visual_backbone: "dinov2_vitb14_reg"
+  n_layers: 3
+  act: "relu"
+  target_dim: 768
+  hidden_layer_size: 768
+  resize_dim: 518

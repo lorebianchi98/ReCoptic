@@ -1,0 +1,4 @@
+model:
+  visual_backbone: "dinov2_vitb14_reg"
+  n_layers: 0
+  resize_dim: 518
