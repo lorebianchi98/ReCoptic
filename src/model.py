@@ -97,9 +97,7 @@ class EmbeddingModel(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         img1, img2, label = batch
-
-        
-        if self.ltype != 'infonce':
+        if self.ltype != 'infonce' and self.ltype != 'sigmoid':
             # Generate embeddings
             embedding1 = self(img1)
             embedding2 = self(img2)
@@ -125,25 +123,47 @@ class EmbeddingModel(L.LightningModule):
             sims = embeds @ embeds.T
             
             # deleting elements on the diagonal (self-similarity)
-            mask = ~torch.eye(N).bool()
-            true_labels = true_labels[mask].view(N, N - 1).float()
-            # set the true label for each row to 1 / n_positive
-            true_labels /= true_labels.sum(dim = 1).unsqueeze(1)
-            sims = sims[mask].view(N, N - 1)
+            if self.ltype == 'infonce':
+                mask = ~torch.eye(N).bool()
+                true_labels = true_labels[mask].view(N, N - 1).float()
+                # set the true label for each row to 1 / n_positive
+                true_labels /= true_labels.sum(dim = 1).unsqueeze(1)
+                sims = sims[mask].view(N, N - 1)
+            if self.ltype == 'sigmoid':
+                # Extract upper triangular indices (excluding diagonal)
+                idx = torch.triu_indices(N, N, offset=1)
+                i, j = idx[0], idx[1]
 
-        # Compute loss
-        loss = self.loss_fn(sims, true_labels)
+                # Labels: 1 if same collection, 0 otherwise
+                true_labels = true_labels[i, j].float()
+
+                # Similarity logits (not passed through sigmoid, suitable for BCEWithLogitsLoss)
+                logits = sims[i, j]
+
+                # Compute class imbalance for pos_weight
+                n_positive = true_labels.sum()
+                n_total = true_labels.numel()
+                n_negative = n_total - n_positive
+
+                # Avoid division by zero
+                pos_weight = torch.tensor([n_negative / n_positive]) if n_positive > 0 else torch.tensor([1.0])
+
+                # Binary Cross-Entropy loss with logits
+                criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(logits.device))
+                loss = criterion(logits, true_labels)
+        if self.ltype != 'sigmoid':
+            # Compute loss
+            loss = self.loss_fn(sims, true_labels)
         
         if self.ltype == "infonce":
             loss = loss / N
 
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         return loss
-
     def validation_step(self, batch, batch_idx):
         img1, img2, label = batch
 
-        if self.ltype != 'infonce':
+        if self.ltype != 'infonce' and self.ltype != 'sigmoid':
             # Generate embeddings
             embedding1 = self(img1)
             embedding2 = self(img2)
@@ -169,19 +189,35 @@ class EmbeddingModel(L.LightningModule):
             embeds = F.normalize(embeds, p=2, dim=1)
             sims = embeds @ embeds.T
 
-            # Remove diagonal
-            mask = ~torch.eye(N).bool()
-            true_labels = true_labels[mask].view(N, N - 1).float()
-            # set the true label for each row to 1 / n_positive
-            true_labels /= true_labels.sum(dim = 1).unsqueeze(1)
-            sims = sims[mask].view(N, N - 1)
+            if self.ltype == 'infonce':
+                mask = ~torch.eye(N).bool()
+                true_labels = true_labels[mask].view(N, N - 1).float()
+                true_labels /= true_labels.sum(dim=1).unsqueeze(1)
+                sims = sims[mask].view(N, N - 1)
+                loss = self.loss_fn(sims, true_labels)
+                loss = loss / N
 
-            # Loss
-            loss = self.loss_fn(sims, true_labels)
-            loss = loss / N
-            
+            elif self.ltype == 'sigmoid':
+                # Upper triangular mask (excluding diagonal)
+                idx = torch.triu_indices(N, N, offset=1)
+                i, j = idx[0], idx[1]
+
+                true_labels = true_labels[i, j].float()
+                logits = sims[i, j]
+
+                # Compute class imbalance
+                n_positive = true_labels.sum()
+                n_total = true_labels.numel()
+                n_negative = n_total - n_positive
+
+                pos_weight = torch.tensor([n_negative / n_positive]) if n_positive > 0 else torch.tensor([1.0])
+
+                criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight.to(logits.device))
+                loss = criterion(logits, true_labels)
+
         self.log("val_loss", loss, prog_bar=True, on_step=False, on_epoch=True, logger=True, sync_dist=True)
         return loss
+
 
     def configure_loss(self, ltype='soft_f1'):
         self.ltype = ltype
@@ -192,6 +228,8 @@ class EmbeddingModel(L.LightningModule):
         elif ltype == 'infonce':
             loss_obj = UnidirectionalInfonce()
             self.loss_fn = loss_obj.forward
+        elif ltype == 'sigmoid':
+            self.loss_fn = None
         else:
             raise Exception("Unimplemented loss function")
         
